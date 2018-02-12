@@ -11,47 +11,57 @@ import numpy as np
 import glob, pickle
 import sys
 import gdal
+import datetime
+import logging
+
+def fixAqua(refA):
+    """
+    Predict the missing Aqua band 5 from places
+    where it worked...
+    """
+    """
+    make some masks
+    """
+    observed = np.all(refA>0, axis=0)
+    NPIXELS = 100
+    if observed.sum() < NPIXELS:
+        # not enough pixels
+        return None
+    else:
+        missing  = np.logical_and(refA[5]==0, ~np.all(refA==0, axis=0))
+        ob = refA[:, observed]
+        ob = ob[[0, 1, 2, 3, 4, 6], :]
+        predict = refA[5, observed]
+        A = np.ones((7, observed.sum()))
+        A[1:, :]=ob
+        try:
+            x = np.linalg.lstsq(A.T, predict)[0]
+        except:
+            # something went wrong
+            return None
+        """
+        now predict where empty
+        """
+        ob = refA[:, missing]
+        ob = ob[[0, 1, 2, 3, 4, 6], :]
+        A = np.ones((7, missing.sum()))
+        A[1:, :]=ob
+        A = A.T
+        b6 = A.dot(x)
+        """
+        fill missing with this
+        """
+        refA[5, missing]=b6
+    return None
+
 
 """
     QA functions
 """
-def bitMask(qa, bitStart, bitLength, bitString="00"):
-    """
-    makes mask for a particular part of the modis bit string
-    "inspired" from pymasker
-    """
-    lenstr = ''
-    for i in range(bitLength):
-        lenstr += '1'
-    bitlen = int(lenstr, 2)
-
-    if type(bitString) == str:
-        value = int(bitString, 2)
-
-    posValue = bitlen << bitStart
-    conValue = value << bitStart
-    mask = (qa & posValue) == conValue
-    return mask
-
-def apply_QA(qa):
-    """
-    make a QA mask
-    """
-    """
-    use the state (1km) information to mask land/water and clouds etc
-    """
-    clear = bitMask(qa, bitStart=0, bitLength=2, bitString='00')
-    assumedClear = bitMask(qa, bitStart=0, bitLength=2, bitString='11')
-    clear = clear | assumedClear
-    # check we are looking at just land pixels
-    land = bitMask(qa, bitStart=3, bitLength=3, bitString='001')
-    # check for cloud shadows
-    noShadow = bitMask(qa, bitStart=2, bitLength=1, bitString='0')
-    """
-    Return overall qa mask
-    """
-    QA_mask = land & clear & noShadow# & noCirrus
-    return QA_mask
+def apply_qa(qa):
+    QA_OK = np.array([8, 72, 136, 200, 1032, 1288, 2056, 2120, 2184, 2248])
+    qa2 = np.in1d(qa, QA_OK).reshape(qa.shape)
+    return qa2
 
 def vrt_loader(tile, date, xmin, ymin, xmax, ymax):
     vrt_dir = '/home/users/jbrennan01/mod09_vrts/'
@@ -77,9 +87,9 @@ def vrt_loader(tile, date, xmin, ymin, xmax, ymax):
     doy = np.array([int(qainfo.GetRasterBand(b+1).GetMetadataItem("DoY")) for b in xrange(qainfo.RasterCount)])
     year_doy = np.array([int(qainfo.GetRasterBand(b+1).GetMetadataItem("Year")) for b in xrange(qainfo.RasterCount)])
     dates = np.array([datetime.datetime(year, 1, 1) + datetime.timedelta(days - 1) for year, days in zip(year_doy, doy)])
-
+    sens = np.array([qainfo.GetRasterBand(b+1).GetMetadataItem("Platform") for b in xrange(qainfo.RasterCount)])
     # select correct date
-
+    #import pdb; pdb.set_trace()
     idx = np.where(dates==date)[0]+1 # add 1 for GDAL
     # load these bands
     for nm, p in zip(dNames, files):
@@ -92,6 +102,7 @@ def vrt_loader(tile, date, xmin, ymin, xmax, ymax):
             #print nm, p, band
         data[nm]=np.array(datastack)
     data['dates'] = dates[idx-1]
+    data['sensor']=sens[idx-1]
     return data
 
 
@@ -116,46 +127,51 @@ def LoadData(tile, beginning, ending, xmin, xmax, ymin, ymax):
     datas['vza'] = []
     datas['sza'] = []
     datas['raa'] = []
-
-
-
-
+    datas['sensor']=[]
     ida = 0
     n = len(dates)
     for date in dates:
         data = vrt_loader(tile, date, xmin, ymin, xmax, ymax)
-        datas['qa'].append(data['qa'])
-        datas['date'].append(data['dates'])
+        # do qa
+        qa = apply_qa(data['qa'])
+        datas['qa'].append(qa)
         refl = np.stack(([data['brdf%i' % b] for b in xrange(1,8)]))
         refl = np.swapaxes(refl, 0,1 )
         refl = refl.astype(float)
         refl *= 0.0001
         """
+        Fix aqua band
+        """
+        band6 = refl[:, 5]>0.0
+        qa = np.logical_and(qa, band6)
+        datas['date'].append(data['dates'])
+
+        #import pdb; pdb.set_trace()
+        #[fixAqua(r) for r in refl]
+        #import pdb; pdb.set_trace()
+        #try:
+        #    [fixAqua(r) for r in refl]
+        #except:
+        #    pass
+        #import pdb; pdb.set_trace()
+        """
         fix mask errors
         due to band6
         """
-        newMask = np.logical_or(~data['qa'], refl[:, 5]==0)
-        newMask = np.swapaxes(np.stack([newMask]*7), 0, 1)
-        refl = np.ma.masked_array(refl,newMask)
+        datas['sensor'].append(data['sensor'])
         datas['refl'].append( refl )
         datas['vza'].append( data['vza']*0.01 )
         datas['sza'].append( data['sza']*0.01 )
         datas['raa'].append( (data['vaa']*0.01 - data['saa']*0.01).astype( np.float32 ))
-        logging.info("Loaded data for %i / %i" % (ida, n))
         ida += 1
     # fix structure
-    import pdb; pdb.set_trace()
     datas['refl'] = np.vstack(datas['refl'])
     datas['qa'] = np.vstack(datas['qa'])
     datas['vza'] = np.vstack(datas['vza']).astype(float)
     datas['sza'] = np.vstack(datas['sza']).astype(float)
     datas['raa'] = np.vstack(datas['raa']).astype(float)
     datas['date'] = np.hstack(datas['date'])
-    # do proper qa
-    datas['qa'] = apply_QA(datas['qa'])
-    # change to masked array
-    datas['refl'] = np.ma.masked_array(datas['refl'],
-                    ~np.swapaxes(np.stack([datas['qa']]*7), 0, 1))
+    datas['sensor'] = np.hstack(datas['sensor'])
     """
     Now also load the active fires
     Load all and filter by date
