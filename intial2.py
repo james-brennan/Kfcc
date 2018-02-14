@@ -19,7 +19,7 @@ if __name__ == "__main__":
     """
     Load data
     """
-    tile = 'h19v10'
+    tile = 'h30v10'
     year = 2008
     log_dir = '/home/users/jbrennan01/DATA2/Kfcc/logs/'
     # add filemode="w" to overwrite

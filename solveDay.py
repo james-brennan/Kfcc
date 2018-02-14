@@ -30,7 +30,7 @@ if __name__ == "__main__":
     """
     Load initial conditions
     """
-    tile = 'h30v10'
+    tile = 'h19v10'
     inputdir = '/group_workspaces/cems2/nceo_generic/users/jbrennan01/Kfcc/x0s/'
     f = h5py.File( inputdir+'/'+'%s.hdf5' % (tile),'r')
 
@@ -62,8 +62,8 @@ if __name__ == "__main__":
     """
     process in chunks to save memory
     """
-    for x0 in xrange(2000, 2400, 256):
-        for y0 in xrange(2000, 2400, 256):
+    for x0 in xrange(0, 2400, 256):
+        for y0 in xrange(0, 2400, 256):
             x1 = x0 + 256
             y1 = y0 + 256
             x1 = np.minimum(x1, 2400)
@@ -242,7 +242,7 @@ if __name__ == "__main__":
                 # increment date
                 date += datetime.timedelta(days=1)
                 iday += 1
-                import pdb; pdb.set_trace()
+                #import pdb; pdb.set_trace()
             """
             write to outputs
             """
